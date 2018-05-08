@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*
+
 import os, glob, re, signal, sys, argparse, threading, time
 from random import shuffle
 import random
@@ -12,11 +14,11 @@ from TEST import test_VDSR
 
 DATA_PATH = "./data/train/"
 IMG_SIZE = (41, 41)
-BATCH_SIZE = 64
+BATCH_SIZE = 512
 BASE_LR = 0.0001
 LR_RATE = 0.1
 LR_STEP_SIZE = 120
-MAX_EPOCH = 1
+MAX_EPOCH = 120
 
 USE_QUEUE_LOADING = False#True
 
@@ -109,9 +111,9 @@ if __name__ == '__main__':
 	train_output, weights 	= shared_model(train_input)
 	loss = tf.reduce_sum(tf.nn.l2_loss(tf.subtract(train_output, train_gt)))
 
-
-	for w in weights:
-		loss += tf.nn.l2_loss(w)*1e-4
+	#change by shijie
+	#for w in weights:
+	#	loss += tf.nn.l2_loss(w)*1e-4
 	tf.summary.scalar("loss", loss)
 
 	global_step 	= tf.Variable(0, trainable=False)
@@ -139,7 +141,7 @@ if __name__ == '__main__':
 
 		if model_path:
 			print "restore model..."
-			saver.restore(sess, model_path)
+			saver.restore(sess, tf.train.latest_checkpoint(model_path))
 			print "Done"
 
 		### WITH ASYNCHRONOUS DATA LOADING ###
@@ -197,7 +199,9 @@ if __name__ == '__main__':
 					offset = step*BATCH_SIZE
 					input_data, gt_data, cbcr_data = get_image_batch(train_list, offset, BATCH_SIZE)
 					feed_dict = {train_input: input_data, train_gt: gt_data}
+					start_time = time.time()
 					_,l,output,lr, g_step = sess.run([opt, loss, train_output, learning_rate, global_step], feed_dict=feed_dict)
+					print('[Batch:%d] cost time:%.4f'%(BATCH_SIZE,time.time()-start_time))
 					print "[epoch %2.4f] loss %.4f\t lr %.5f"%(epoch+(float(step)*BATCH_SIZE/len(train_list)), np.sum(l)/BATCH_SIZE, lr)
 					del input_data, gt_data, cbcr_data
 

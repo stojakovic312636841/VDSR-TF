@@ -14,10 +14,11 @@ from tensorflow.python.client import device_lib
 #from MODEL_FACTORIZED import model_factorized
 
 DATA_PATH = "./data/train/"
+TEST_DATA_PATH = "./data/test/"
 TOWER_NAME = 'tower'
 IMG_SIZE = (41, 41)
-BATCH_SIZE = 512
-BASE_LR = 0.0001
+BATCH_SIZE = 1024
+BASE_LR = 0.01
 LR_RATE = 0.1
 LR_STEP_SIZE = 120
 MAX_EPOCH = 1
@@ -28,9 +29,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--model_path")
 args = parser.parse_args()
 model_path = args.model_path
-
-TEST_DATA_PATH = "./data/test/"
-
 
 
 def get_train_list(data_path):
@@ -75,7 +73,7 @@ def get_image_batch(train_list,offset,batch_size):
 	gt_list = np.array(gt_list)
 	gt_list.resize([BATCH_SIZE, IMG_SIZE[1], IMG_SIZE[0], 1])
 
-	print(len(input_list))
+	#print(len(input_list))
 	return input_list, gt_list, np.array(cbcr_list)
 
 
@@ -123,17 +121,19 @@ def tower_loss(scope,images,labels):
 
 	# Build the portion of the Graph calculating the losses. Note that we will
 	# assemble the total_loss using a custom function below.	
-	_ = loss(logits, labels)
+	loss_ = loss(logits, labels)
 
 	# Assemble all of the losses for the current tower only.
 	losses = tf.get_collection('losses', scope)
 
 	# Calculate the total loss for the current tower.
 	total_loss = tf.add_n(losses, name='total_loss')
-		
-	#print("%0.4f s"%(time.time()-start_time),"%0.4f"%(100.0*step/len(train_list)))
-
-	return total_loss
+	
+	total_loss = total_loss/BATCH_SIZE
+	
+	#print("%0.4f s"%(time.time()-start_time))
+	
+	return logits, total_loss
 
 
 
@@ -175,109 +175,103 @@ def average_gradients(tower_grads):
 	return average_grads
 
 
-def generate_towers(step,train_list,NUM_GPU=2, batch_size=BATCH_SIZE):
+'''
+def average_gradients(tower_grads): 
+     
+    print('towerGrads:')  
+    idx = 0  
+    for grads in tower_grads:  # grads 为 一个list，其中元素为 梯度-变量 组成的二元tuple  
+        print('grads---tower_%d' % idx)  
+        for g_var in grads:  
+            print(g_var)  
+            print('\t%s\n\t%s' % (g_var[0].op.name, g_var[1].op.name))  
+#             print('\t%s: %s'%(g_var[0].op.name,g_var[1].op.name))  
+        idx += 1  
+    
+    if(len(tower_grads) == 1):  
+        return tower_grads[0]  
+    avgGrad_var_s = []  
+    for grad_var_s in zip(*tower_grads):  
+        grads = []  
+        v = None  
+        for g, v_ in grad_var_s:  
+            g = tf.expand_dims(g, 0)  
+            grads.append(g)  
+            v = v_  
+        all_g = tf.concat(grads,0)  
+        avg_g = tf.reduce_mean(all_g, 0, keep_dims=False)  
+        avgGrad_var_s.append((avg_g, v));  
+    return avgGrad_var_s  
+'''
+
+def generate_towers(train_list, NUM_GPU=2, batch_size=BATCH_SIZE):
 	
 
 	train_input = tf.placeholder(tf.float32, shape=(BATCH_SIZE, IMG_SIZE[0], IMG_SIZE[1], 1))
 	train_gt  	= tf.placeholder(tf.float32, shape=(BATCH_SIZE, IMG_SIZE[0], IMG_SIZE[1], 1))
 
-	train_input = tf.split(train_input, NUM_GPU, 0)
-	train_gt	= tf.split(train_gt, NUM_GPU, 0)
+	train_input_tensor = tf.split(train_input, NUM_GPU, 0)
+	train_gt_tensor	   = tf.split(train_gt, NUM_GPU, 0)
 
 	# Calculate the gradients for each model tower.
 	tower_grads = []
 
-	learning_rate 	= tf.train.exponential_decay(BASE_LR, step*BATCH_SIZE, len(train_list)*LR_STEP_SIZE, LR_RATE, staircase=True)
-
-	opt = tf.train.MomentumOptimizer(learning_rate,0.9,use_nesterov=True,use_locking=True)
+	#learning_rate = tf.train.exponential_decay(BASE_LR, 1, len(train_list)*LR_STEP_SIZE, LR_RATE, staircase=True)
+	#opt = tf.train.MomentumOptimizer(learning_rate,0.9,use_nesterov=True,use_locking=True)
+	learning_rate = BASE_LR
+	opt = tf.train.AdamOptimizer(learning_rate) 
 
 	with tf.variable_scope(tf.get_variable_scope()):	
-		for i in xrange(check_available_gpus()):
+		for i in xrange(NUM_GPU):				
 			with tf.device('/gpu:%d' % i):
 				with tf.name_scope('%s_%d' % (TOWER_NAME, i)) as scope:
 					print('%s_%d' % (TOWER_NAME, i))
-					input_sub = train_input[i] 
-					print("device:%s" % input_sub.device) 
-					target_sub = train_gt[i]  
+					input_sub = train_input_tensor[i] 					
+					target_sub = train_gt_tensor[i]  
 
 	
                     # Calculate the loss for one tower of the VDSR model.
                     # This function constructs the entire VDSR model but
                     # shares the variables across all towers.
-					loss = tower_loss(scope,input_sub,target_sub)
+					y, t_loss = tower_loss(scope,input_sub,target_sub)
 
+					#print("loss:%s" % t_loss.device)
+ 
 					# Reuse variables for the next tower.
 					tf.get_variable_scope().reuse_variables()
 
 					# Retain the summaries from the final tower.
 					summaries = tf.get_collection(tf.GraphKeys.SUMMARIES,scope)
-
+					
 					# Calculate the gradients for the batch of data on this
 					# VDSR tower.
-					grads = opt.compute_gradients(loss, gate_gradients=0)
-
+					grads = opt.compute_gradients(t_loss)
+					
 					# Keep track of the gradients across all towers.
-					tower_grads.append(grads)
+					tower_grads.append(grads)					
 
 	# We must calculate the mean of each gradient. Note that this is the
 	# synchronization point across all towers.
-	grads = average_gradients(tower_grads)
+	grads = average_gradients(tower_grads)		
 
-	train_op = opt.apply_gradients(grads, global_step = step)
-
-	return train_input, train_gt,train_op
+	train_op = opt.apply_gradients(grads)	
+	
+	return train_input, train_gt,learning_rate ,train_op, t_loss, y, summaries
 
 
 def train():
+	#get train_list
 	train_list = get_train_list(DATA_PATH)
+	shuffle(train_list)
 
 	with tf.Graph().as_default(), tf.device('/cpu:0'):
+
 		# Create a variable to count the number of train() calls. This equals
     	# the number of batches processed * FLAGS.num_gpus.
 		global_step = tf.get_variable('global_step', [], initializer = tf.constant_initializer(0),trainable=False)
 
-		'''
-		learning_rate 	= tf.train.exponential_decay(BASE_LR, global_step*BATCH_SIZE, len(train_list)*LR_STEP_SIZE, LR_RATE, staircase=True)
-
-		opt = tf.train.MomentumOptimizer(learning_rate,0.9,use_nesterov=True,use_locking=True)
-
-		# Calculate the gradients for each model tower.
-		tower_grads = []
-
-		train_input = tf.placeholder(tf.float32, shape=(BATCH_SIZE, IMG_SIZE[0], IMG_SIZE[1], 1))
-		train_gt  	= tf.placeholder(tf.float32, shape=(BATCH_SIZE, IMG_SIZE[0], IMG_SIZE[1], 1))		
-				
-		with tf.variable_scope(tf.get_variable_scope()):	
-			for i in xrange(check_available_gpus()):
-				with tf.device('/gpu:%d' % i):
-					with tf.name_scope('%s_%d' % (TOWER_NAME, i)) as scope:
-						print('%s_%d' % (TOWER_NAME, i))
-                        # Calculate the loss for one tower of the VDSR model.
-                        # This function constructs the entire VDSR model but
-                        # shares the variables across all towers.
-						loss = tower_loss(scope,images_batch,labels_batch)
-
-						# Reuse variables for the next tower.
-						tf.get_variable_scope().reuse_variables()
-
-						# Retain the summaries from the final tower.
-						summaries = tf.get_collection(tf.GraphKeys.SUMMARIES,scope)
-
-						# Calculate the gradients for the batch of data on this
-						# VDSR tower.
-						grads = opt.compute_gradients(loss, gate_gradients=0)
-
-						# Keep track of the gradients across all towers.
-						tower_grads.append(grads)
-
-		# We must calculate the mean of each gradient. Note that this is the
-		# synchronization point across all towers.
-		grads = average_gradients(tower_grads)
-
-		train_op = opt.apply_gradients(grads, global_step=global_step)
-		'''
-		train_input, train_gt, apply_gradient_op = generate_towers(step = global_step,train_list = train_list)
-
+		train_input, train_gt, learning_rate, train_op, t_loss, train_output, summaries = generate_towers(train_list = train_list, NUM_GPU=check_available_gpus())
+		
 		# Create a saver.
 		saver = tf.train.Saver(tf.global_variables(),sharded=True)
 
@@ -297,52 +291,52 @@ def train():
 		coord = tf.train.Coordinator()
 		threads = tf.train.start_queue_runners(sess=sess, coord=coord)
 
-		summary_writer = tf.summary.FileWriter(DATA_PATH, sess.graph)
+		#summary_writer = tf.summary.FileWriter(DATA_PATH, sess.graph)
 
-	try:
-		step = 0
-		while not coord.should_stop():
-			for epoch in xrange(0, MAX_EPOCH):
-				for step in range(len(train_list)//BATCH_SIZE):
-					offset = step*BATCH_SIZE
-					images_batch, labels_batch, _ = get_image_batch(train_list, offset, BATCH_SIZE)
-					feed_dict = {train_input:images_batch, train_gt:labels_batch}
-					start_time = time.time()
+	try:		
+		for epoch in xrange(0, MAX_EPOCH):
+			for step in range(len(train_list)//BATCH_SIZE):
+				offset = step*BATCH_SIZE
+				images_batch, labels_batch, _ = get_image_batch(train_list, offset, BATCH_SIZE)					
 
-					# Run one step of the model.  The return values are
-					# the activations from the `train_op` (which is
-					# discarded) and the `loss` op.  To inspect the values
-					# of your ops or variables, you may include them in
-					# the list passed to sess.run() and the value tensors
-					# will be returned in the tuple from the call.
-					
+				# Run one step of the model.  The return values are
+				# the activations from the `train_op` (which is
+				# discarded) and the `loss` op.  To inspect the values
+				# of your ops or variables, you may include them in
+				# the list passed to sess.run() and the value tensors
+				# will be returned in the tuple from the call.
+				
+				feed_dict = {train_input:images_batch, train_gt:labels_batch}				
 
-					_, loss_value = sess.run([train_op, loss, learning_rate, global_step], feed_dict=feed_dict)
-	
-					duration = time.time() - start_time
-					print(loss_value)
-					#assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
+				start_time = time.time()
 
-					# Print an overview fairly often.
-					'''
-					if step % 100 == 0:
-						num_examples_per_step = FLAGS.batch_size * FLAGS.num_gpus
-						examples_per_sec = num_examples_per_step / duration
-						sec_per_batch = duration / FLAGS.num_gpus
-						format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f ''sec/batch)')
-						print(format_str % (datetime.now(), step, loss_value,examples_per_sec, sec_per_batch))
-					if FLAGS.tb_logging:
-						if step % 10 == 0:
-							summary_str = sess.run(summary_op)
-							summary_writer.add_summary(summary_str, step)
-					'''
-					# Save the model checkpoint periodically.
-					'''
-					if step % 1000 == 0 or (step + 1) == FLAGS.num_epochs * FLAGS.batch_size:
-						checkpoint_path = os.path.join(FLAGS.train_dir,'model.ckpt')
-						saver.save(sess, checkpoint_path, global_step=step)
-					'''
-					del images_batch, labels_batch
+				_, loss_value ,debug= sess.run([train_op, t_loss, summaries], feed_dict=feed_dict)				
+				print(debug)
+				duration = time.time() - start_time
+				print("use time:%.3f___step:%d-->loss:%.4f"%(duration,step,loss_value))
+				
+				assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
+
+				# Print an overview fairly often.
+				'''
+				if step % 100 == 0:
+					num_examples_per_step = FLAGS.batch_size * FLAGS.num_gpus
+					examples_per_sec = num_examples_per_step / duration
+					sec_per_batch = duration / FLAGS.num_gpus
+					format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f ''sec/batch)')
+					print(format_str % (datetime.now(), step, loss_value,examples_per_sec, sec_per_batch))
+				if FLAGS.tb_logging:
+					if step % 10 == 0:
+						summary_str = sess.run(summary_op)
+						summary_writer.add_summary(summary_str, step)
+				'''
+				# Save the model checkpoint periodically.
+				'''
+				if step % 1000 == 0 or (step + 1) == FLAGS.num_epochs * FLAGS.batch_size:
+					checkpoint_path = os.path.join(FLAGS.train_dir,'model.ckpt')
+					saver.save(sess, checkpoint_path, global_step=step)
+				'''
+				del images_batch, labels_batch
 
 					
 	except tf.errors.OutOfRangeError:
@@ -365,6 +359,8 @@ def main(argv=None):  # pylint: disable=unused-argument
     train()
     duration = time.time() - start_time
     print('Total Duration (%.3f sec)' % duration)
+
+
 
 if __name__ == '__main__':
     tf.app.run()

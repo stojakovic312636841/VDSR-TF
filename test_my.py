@@ -68,7 +68,8 @@ def nparryToImage(arry):
 def test_VDSR_with_sess(epoch, ckpt_path, data_path,sess):
 	folder_list = glob.glob(os.path.join(data_path, 'myself*')) #dir adress
 	print 'folder_list', folder_list
-	saver.restore(sess, ckpt_path)
+	#saver.restore(sess, ckpt_path)
+	saver.restore(sess, tf.train.latest_checkpoint('./ckpt/'))
 	
 	psnr_dict = {}
 	for folder_path in folder_list:
@@ -124,8 +125,11 @@ def test_VDSR(epoch, ckpt_path, data_path):
 		test_VDSR_with_sess(epoch, ckpt_path, data_path, sess)
 
 if __name__ == '__main__':
-	model_list = sorted(glob.glob("./VDSR_adam_epoch*"))#"./checkpoints/VDSR_adam_epoch_*"
+	#model_list = sorted(glob.glob("./VDSR_adam_epoch*"))#"./checkpoints/VDSR_adam_epoch_*"
+	model_list = sorted(glob.glob("./ckpt/model*"))
 	model_list = [fn for fn in model_list if not os.path.basename(fn).endswith("meta")]
+	model_list = [fn for fn in model_list if not os.path.basename(fn).endswith("index")]
+	print(model_list)
 	with tf.Session() as sess:
 		input_tensor = tf.placeholder(tf.float32, shape=(1, None, None, 1))
 		shared_model = tf.make_template('shared_model', model)
