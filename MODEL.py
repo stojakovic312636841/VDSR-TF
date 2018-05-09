@@ -1,5 +1,9 @@
 import tensorflow as tf
 import numpy as np
+import re
+
+TOWER_NAME = 'tower'
+
 
 def model(input_tensor):
 	with tf.device("/gpu:0"):#/gpu:0
@@ -80,7 +84,22 @@ def _variable_with_weight_decay(name, shape, stddev, wd):
 	return var
 
 
+def _activation_summary(x):
+    """Helper to create summaries for activations.
 
+    Creates a summary that provides a histogram of activations.
+    Creates a summary that measures the sparsity of activations.
+
+    Args:
+      x: Tensor
+    Returns:
+      nothing
+    """
+    # Remove 'tower_[0-9]/' from the name in case this is a multi-GPU training
+    # session. This helps the clarity of presentation on tensorboard.    
+    tensor_name = re.sub('%s_[0-9]*/' % TOWER_NAME, '', x.op.name)
+    tf.summary.histogram(tensor_name + '/activations', x)
+    tf.summary.scalar(tensor_name + '/sparsity', tf.nn.zero_fraction(x))
 
 
 def inference(images):
@@ -103,33 +122,43 @@ def inference(images):
     # are grayscale -- it would be 3 for an RGB image, 4 for RGBA, etc.
 
 	input_tensor = tf.cast(images, tf.float32)
-
+	weights = []
 	#conv_00
 	with tf.variable_scope('conv00' ,reuse = tf.AUTO_REUSE) as scope:
 		tensor = None
 
 		kernel = _variable_with_weight_decay('conv_00_w',shape=[3,3,1,64],stddev=np.sqrt(2.0/9),wd=0.0)
 		biases = _variable_on_cpu('conv_00_b',[64],tf.constant_initializer(0.0))
+		weights.append(kernel)
+		weights.append(biases)
 		tensor = tf.nn.relu(tf.nn.bias_add(tf.nn.conv2d(input_tensor, kernel, strides=[1,1,1,1], padding='SAME'), biases))
+		#_activation_summary(tensor)
 
 	#conv_01 -- conv_19
 	for i in range(18):
 		with tf.variable_scope('conv%02d'%(i+1) ,reuse = tf.AUTO_REUSE) as scope:
 			kernel = _variable_with_weight_decay('conv_%02d_w' % (i+1),shape=[3,3,64,64],stddev=np.sqrt(2.0/9/64),wd=0.0)
 			biases = _variable_on_cpu('conv_%02d_b' % (i+1),[64],tf.constant_initializer(0.0))
+			weights.append(kernel)
+			weights.append(biases)
 			tensor = tf.nn.relu(tf.nn.bias_add(tf.nn.conv2d(tensor, kernel, strides=[1,1,1,1], padding='SAME'), biases))
+			#_activation_summary(tensor)
 	
 
 	#conv_20
 	with tf.variable_scope('conv20' ,reuse = tf.AUTO_REUSE) as scope:		
 		kernel = _variable_with_weight_decay('conv_20_w',shape=[3,3,64,1],stddev=np.sqrt(2.0/9/64),wd=0.0)
 		biases = _variable_on_cpu('conv_20_b',[1],tf.constant_initializer(0.0))
+		weights.append(kernel)
+		weights.append(biases)
 		tensor = tf.nn.bias_add(tf.nn.conv2d(tensor, kernel, strides=[1,1,1,1], padding='SAME'), biases)
+		#_activation_summary(tensor)
 
 
 	tensor = tf.add(tensor, input_tensor)
+	_activation_summary(tensor)
 
-	return tensor	
+	return tensor, weights
 
 
 

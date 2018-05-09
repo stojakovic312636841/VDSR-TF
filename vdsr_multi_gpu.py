@@ -15,20 +15,25 @@ from tensorflow.python.client import device_lib
 
 DATA_PATH = "./data/train/"
 TEST_DATA_PATH = "./data/test/"
+CKPT_PATH = './shijie_ckpt/'
 TOWER_NAME = 'tower'
 IMG_SIZE = (41, 41)
 BATCH_SIZE = 1024
 BASE_LR = 0.01
 LR_RATE = 0.1
 LR_STEP_SIZE = 120
-MAX_EPOCH = 1
+MAX_EPOCH = 80
 
 #USE_QUEUE_LOADING = False#True
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_path")
+parser.add_argument("--epoch", type=int, default=0)
 args = parser.parse_args()
 model_path = args.model_path
+start_epoch = args.epoch
+
+
 
 
 def get_train_list(data_path):
@@ -117,7 +122,7 @@ def tower_loss(scope,images,labels):
 	start_time = time.time()
 
 	# Build inference Graph.
-	logits = inference(images)
+	logits, weights = inference(images)
 
 	# Build the portion of the Graph calculating the losses. Note that we will
 	# assemble the total_loss using a custom function below.	
@@ -131,8 +136,14 @@ def tower_loss(scope,images,labels):
 	
 	total_loss = total_loss/BATCH_SIZE
 	
-	#print("%0.4f s"%(time.time()-start_time))
-	
+	if 0:
+		for l in losses + [total_loss]:
+			# Remove 'tower_[0-9]/' from the name in case this is a multi-GPU
+			# training session. This helps the clarity of presentation on
+			# tensorboard.
+			loss_name = re.sub('%s_[0-9]*/' % TOWER_NAME, '', l.op.name)
+			tf.summary.scalar(loss_name, l)
+
 	return logits, total_loss
 
 
@@ -234,8 +245,7 @@ def generate_towers(train_list, NUM_GPU=2, batch_size=BATCH_SIZE):
                     # This function constructs the entire VDSR model but
                     # shares the variables across all towers.
 					y, t_loss = tower_loss(scope,input_sub,target_sub)
-
-					#print("loss:%s" % t_loss.device)
+					print("loss:%s" % t_loss.device)
  
 					# Reuse variables for the next tower.
 					tf.get_variable_scope().reuse_variables()
@@ -254,15 +264,27 @@ def generate_towers(train_list, NUM_GPU=2, batch_size=BATCH_SIZE):
 	# synchronization point across all towers.
 	grads = average_gradients(tower_grads)		
 
+	# Add histograms for gradients.
+	if 0:
+		for grad, var in grads:
+			if grad is not None:
+				summaries.append(tf.summary.histogram(var.op.name + '/gradients', grad))
+		# Add a summary to track the learning rate.
+		summaries.append(tf.summary.scalar('learning_rate', learning_rate))
+
 	train_op = opt.apply_gradients(grads)	
 	
+	# Add histograms for trainable variables.
+	if 0:
+		for var in tf.trainable_variables():
+			summaries.append(tf.summary.histogram(var.op.name, var))
+
 	return train_input, train_gt,learning_rate ,train_op, t_loss, y, summaries
 
 
 def train():
 	#get train_list
-	train_list = get_train_list(DATA_PATH)
-	shuffle(train_list)
+	train_list = get_train_list(DATA_PATH)	
 
 	with tf.Graph().as_default(), tf.device('/cpu:0'):
 
@@ -287,14 +309,23 @@ def train():
 		sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True,log_device_placement=False))
 		sess.run(init_op)
 
+		if model_path:
+			print "restore model..."
+			saver.restore(sess, tf.train.latest_checkpoint(model_path))
+			print "Done"
+
 		# Start input enqueue threads.
 		coord = tf.train.Coordinator()
 		threads = tf.train.start_queue_runners(sess=sess, coord=coord)
 
-		#summary_writer = tf.summary.FileWriter(DATA_PATH, sess.graph)
+		#summary_writer = tf.summary.FileWriter(CKPT_PATH, sess.graph)
 
 	try:		
 		for epoch in xrange(0, MAX_EPOCH):
+			print('epoch start -->%4d'%(epoch+start_epoch))
+			shuffle(train_list)
+			loss_sum = 0
+			epoch_start_time = time.time()
 			for step in range(len(train_list)//BATCH_SIZE):
 				offset = step*BATCH_SIZE
 				images_batch, labels_batch, _ = get_image_batch(train_list, offset, BATCH_SIZE)					
@@ -311,11 +342,14 @@ def train():
 				start_time = time.time()
 
 				_, loss_value ,debug= sess.run([train_op, t_loss, summaries], feed_dict=feed_dict)				
-				print(debug)
-				duration = time.time() - start_time
-				print("use time:%.3f___step:%d-->loss:%.4f"%(duration,step,loss_value))
 				
+
+				duration = time.time() - start_time
+				
+				print("use time:%2.3f___step:%4d-->loss:%.4f"%(duration,step,loss_value))				
 				assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
+
+				loss_sum = loss_sum + loss_value
 
 				# Print an overview fairly often.
 				'''
@@ -325,22 +359,27 @@ def train():
 					sec_per_batch = duration / FLAGS.num_gpus
 					format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f ''sec/batch)')
 					print(format_str % (datetime.now(), step, loss_value,examples_per_sec, sec_per_batch))
-				if FLAGS.tb_logging:
-					if step % 10 == 0:
-						summary_str = sess.run(summary_op)
-						summary_writer.add_summary(summary_str, step)
 				'''
-				# Save the model checkpoint periodically.
-				'''
-				if step % 1000 == 0 or (step + 1) == FLAGS.num_epochs * FLAGS.batch_size:
-					checkpoint_path = os.path.join(FLAGS.train_dir,'model.ckpt')
-					saver.save(sess, checkpoint_path, global_step=step)
-				'''
+
+				#if step % 1 == 0:
+					#summary_str = sess.run(summary_op)
+					#summary_writer.add_summary(summary_str, step)
+				
+				# Save the model checkpoint periodically.				
+				if step % 10 == 0 or (step + 1) == MAX_EPOCH * BATCH_SIZE or (step + 1) == len(train_list)//BATCH_SIZE:
+					#checkpoint_path = os.path.join(CKPT_PATH,'model_%3d.ckpt'%(epoch+start_epoch))
+					checkpoint_path = os.path.join(CKPT_PATH,'model.ckpt')
+					saver.save(sess, checkpoint_path)
+					print('save model')
+				
+				#
 				del images_batch, labels_batch
+			loss_avg = loss_sum / (len(train_list)//BATCH_SIZE)
+			print('epoch %4d is over : loss_avg == %.4f --> cost time %.3f'%(epoch+start_epoch, loss_avg, time.time()-epoch_start_time))
 
 					
 	except tf.errors.OutOfRangeError:
-		print('Done training for %d epochs, %d steps.' % (FLAGS.num_epochs, step))
+		print('Done training for %d epochs, %d steps.' % (epoch, step))
 	finally:
 		# When done, ask the threads to stop.
 		coord.request_stop()
@@ -358,7 +397,7 @@ def main(argv=None):  # pylint: disable=unused-argument
     start_time = time.time()
     train()
     duration = time.time() - start_time
-    print('Total Duration (%.3f sec)' % duration)
+    print('Train_Total Duration (%.3f sec)' % duration)
 
 
 
