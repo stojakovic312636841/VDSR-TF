@@ -3,9 +3,9 @@ clear all;
 
 
 
-dataDir = '291';%fullfile('data', '291');
-mkdir('train');
-%count = 201620;
+dataDir = './test/Set14';%fullfile('data', '291');
+mkdir('eval');
+
 count = 0;
 f_lst = [];
 f_lst = [f_lst; dir(fullfile(dataDir, '*.jpg'))];
@@ -40,7 +40,7 @@ for f_iter = 1:numel(f_lst)
     for x = 0:x_size-1
         for y = 0:y_size-1
             x_coord = x*stride; y_coord = y*stride; 
-            patch_name = sprintf('train/%d',count);
+            patch_name = sprintf('eval/%d',count);
             
             patch = imrotate(img_raw(y_coord+1:y_coord+patch_size,x_coord+1:x_coord+patch_size,:), 0);
             save(patch_name, 'patch');
@@ -52,8 +52,8 @@ for f_iter = 1:numel(f_lst)
             save(sprintf('%s_4', patch_name), 'patch');
             
             count = count+1;
-            
-            patch_name = sprintf('train/%d',count);
+            if 0
+            patch_name = sprintf('eval/%d',count);
             
             patch = imrotate(img_raw(y_coord+1:y_coord+patch_size,x_coord+1:x_coord+patch_size,:), 90);
             save(patch_name, 'patch');
@@ -66,7 +66,7 @@ for f_iter = 1:numel(f_lst)
             
             count = count+1;
             
-            patch_name = sprintf('train/%d',count);
+            patch_name = sprintf('eval/%d',count);
             
             patch = fliplr(imrotate(img_raw(y_coord+1:y_coord+patch_size,x_coord+1:x_coord+patch_size,:), 0));
             save(patch_name, 'patch');
@@ -79,7 +79,7 @@ for f_iter = 1:numel(f_lst)
             
             count = count+1;
             
-            patch_name = sprintf('train/%d',count);
+            patch_name = sprintf('eval/%d',count);
             
             patch = fliplr(imrotate(img_raw(y_coord+1:y_coord+patch_size,x_coord+1:x_coord+patch_size,:), 90));
             save(patch_name, 'patch');
@@ -91,7 +91,7 @@ for f_iter = 1:numel(f_lst)
             save(sprintf('%s_4', patch_name), 'patch');
             
             count = count+1;
-            
+            end
             
             %{
             patch_name = sprintf('aug/%d',count);

@@ -14,7 +14,7 @@ import time
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 DATA_PATH = "./data/test/"
-
+MODEL_DATA_PATH = './shijie_ckpt_180510/'
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_path")
@@ -69,7 +69,7 @@ def test_VDSR_with_sess(epoch, ckpt_path, data_path,sess):
 	folder_list = glob.glob(os.path.join(data_path, 'myself*')) #dir adress
 	print 'folder_list', folder_list
 	#saver.restore(sess, ckpt_path)
-	saver.restore(sess, tf.train.latest_checkpoint('./shijie_ckpt/'))
+	saver.restore(sess, tf.train.latest_checkpoint(MODEL_DATA_PATH))
 	
 	psnr_dict = {}
 	for folder_path in folder_list:
@@ -126,7 +126,7 @@ def test_VDSR(epoch, ckpt_path, data_path):
 
 if __name__ == '__main__':
 	#model_list = sorted(glob.glob("./VDSR_adam_epoch*"))#"./checkpoints/VDSR_adam_epoch_*"
-	model_list = sorted(glob.glob("./shijie_ckpt/model*"))
+	model_list = sorted(glob.glob(MODEL_DATA_PATH+"model*"))
 	model_list = [fn for fn in model_list if not os.path.basename(fn).endswith("meta")]
 	model_list = [fn for fn in model_list if not os.path.basename(fn).endswith("index")]
 	print(model_list)

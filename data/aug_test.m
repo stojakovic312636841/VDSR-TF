@@ -1,3 +1,5 @@
+close all;
+clear all;
 
 target = 'Set14';
 dataDir = fullfile('./test/', target);
@@ -37,10 +39,21 @@ for f_iter = 1:numel(f_lst)
     
     patch_name = sprintf('%s/%d',folder,count);
     
-    save(patch_name, 'img_raw');
-    save(sprintf('%s_2', patch_name), 'img_2');
-    save(sprintf('%s_3', patch_name), 'img_3');
-    save(sprintf('%s_4', patch_name), 'img_4');
+    if 0      %原来的
+        save(patch_name, 'img_raw');
+        save(sprintf('%s_2', patch_name), 'img_2');
+        save(sprintf('%s_3', patch_name), 'img_3');
+        save(sprintf('%s_4', patch_name), 'img_4');
+    else     %自己添加的
+        patch = img_raw;
+        save(patch_name, 'patch');
+        patch = img_2;
+        save(sprintf('%s_2', patch_name), 'patch');
+        patch = img_3;
+        save(sprintf('%s_3', patch_name), 'patch');
+        patch = img_4;
+        save(sprintf('%s_4', patch_name), 'patch');
+    end
     
     count = count + 1;
     display(count);

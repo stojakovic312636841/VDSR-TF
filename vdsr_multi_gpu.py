@@ -13,16 +13,17 @@ from TEST import test_VDSR
 from tensorflow.python.client import device_lib
 #from MODEL_FACTORIZED import model_factorized
 
+LOG_DIR_FILE = './log.txt'
 DATA_PATH = "./data/train/"
-TEST_DATA_PATH = "./data/test/"
-CKPT_PATH = './shijie_ckpt/'
+TEST_DATA_PATH = "./data/test/Set14"
+CKPT_PATH = './samll_target_ckpt/'
 TOWER_NAME = 'tower'
 IMG_SIZE = (41, 41)
-BATCH_SIZE = 1024
-BASE_LR = 0.01
+BATCH_SIZE = 256
+BASE_LR = 0.000008
 LR_RATE = 0.1
-LR_STEP_SIZE = 120
-MAX_EPOCH = 80
+LR_STEP_SIZE = 5
+MAX_EPOCH = 100
 
 #USE_QUEUE_LOADING = False#True
 
@@ -32,6 +33,21 @@ parser.add_argument("--epoch", type=int, default=0)
 args = parser.parse_args()
 model_path = args.model_path
 start_epoch = args.epoch
+
+
+def get_eval_list(data_path):
+	l = glob.glob(os.path.join(data_path,"*"))
+	print len(l)
+	l = [f for f in l if re.search("^\d+.mat$", os.path.basename(f))]
+	print len(l)
+	eval_list = []
+	for f in l:
+		if os.path.exists(f): #f->gt f[:-4]->input
+			if os.path.exists(f[:-4]+"_2.mat"): eval_list.append([f, f[:-4]+"_2.mat"])
+			if os.path.exists(f[:-4]+"_3.mat"): eval_list.append([f, f[:-4]+"_3.mat"])
+			if os.path.exists(f[:-4]+"_4.mat"): eval_list.append([f, f[:-4]+"_4.mat"])
+	return eval_list	
+
 
 
 
@@ -119,7 +135,7 @@ def tower_loss(scope,images,labels):
 	images, labels, _ = get_image_batch(train_list, offset, BATCH_SIZE)			
 	'''
 	#
-	start_time = time.time()
+	#start_time = time.time()
 
 	# Build inference Graph.
 	logits, weights = inference(images)
@@ -215,8 +231,11 @@ def average_gradients(tower_grads):
     return avgGrad_var_s  
 '''
 
-def generate_towers(train_list, NUM_GPU=2, batch_size=BATCH_SIZE):
-	
+
+
+
+
+def eval_towers(eval_list,NUM_GPU=2, batch_size=BATCH_SIZE):
 
 	train_input = tf.placeholder(tf.float32, shape=(BATCH_SIZE, IMG_SIZE[0], IMG_SIZE[1], 1))
 	train_gt  	= tf.placeholder(tf.float32, shape=(BATCH_SIZE, IMG_SIZE[0], IMG_SIZE[1], 1))
@@ -227,9 +246,55 @@ def generate_towers(train_list, NUM_GPU=2, batch_size=BATCH_SIZE):
 	# Calculate the gradients for each model tower.
 	tower_grads = []
 
+	with tf.variable_scope(tf.get_variable_scope()):	
+		for i in xrange(NUM_GPU):				
+			with tf.device('/gpu:%d' % i):
+				with tf.name_scope('eval_%d' % (i)) as scope:
+					print('eval_%d' % (i))
+					input_sub = train_input_tensor[i] 					
+					target_sub = train_gt_tensor[i] 
+	
+                    # Calculate the loss for one tower of the VDSR model.
+                    # This function constructs the entire VDSR model but
+                    # shares the variables across all towers.
+					y, t_loss = tower_loss(scope,input_sub,target_sub)
+					print("loss:%s" % t_loss.device)
+ 
+					# Reuse variables for the next tower.
+					tf.get_variable_scope().reuse_variables()
+
+					# Keep track of the gradients across all towers.
+					tower_grads.append(t_loss)					
+
+	# We must calculate the mean of each gradient. Note that this is the
+	# synchronization point across all towers.
+	eval_loss = tf.add_n(tower_grads)
+	debug = tower_grads
+
+	return train_input, train_gt, eval_loss, debug
+
+
+
+
+	
+
+def generate_towers(train_list, lr,NUM_GPU=2, batch_size=BATCH_SIZE):
+
+	train_input = tf.placeholder(tf.float32, shape=(BATCH_SIZE, IMG_SIZE[0], IMG_SIZE[1], 1))
+	train_gt  	= tf.placeholder(tf.float32, shape=(BATCH_SIZE, IMG_SIZE[0], IMG_SIZE[1], 1))
+
+	train_input_tensor = tf.split(train_input, NUM_GPU, 0)
+	train_gt_tensor	   = tf.split(train_gt, NUM_GPU, 0)
+
+	#train_input_tensor = train_input
+	#train_gt_tensor	   = train_gt
+
+	# Calculate the gradients for each model tower.
+	tower_grads = []
+
 	#learning_rate = tf.train.exponential_decay(BASE_LR, 1, len(train_list)*LR_STEP_SIZE, LR_RATE, staircase=True)
 	#opt = tf.train.MomentumOptimizer(learning_rate,0.9,use_nesterov=True,use_locking=True)
-	learning_rate = BASE_LR
+	learning_rate = lr
 	opt = tf.train.AdamOptimizer(learning_rate) 
 
 	with tf.variable_scope(tf.get_variable_scope()):	
@@ -238,7 +303,10 @@ def generate_towers(train_list, NUM_GPU=2, batch_size=BATCH_SIZE):
 				with tf.name_scope('%s_%d' % (TOWER_NAME, i)) as scope:
 					print('%s_%d' % (TOWER_NAME, i))
 					input_sub = train_input_tensor[i] 					
-					target_sub = train_gt_tensor[i]  
+					target_sub = train_gt_tensor[i] 
+
+					#input_sub =  train_input_tensor
+					#target_sub = train_gt_tensor
 
 	
                     # Calculate the loss for one tower of the VDSR model.
@@ -270,7 +338,7 @@ def generate_towers(train_list, NUM_GPU=2, batch_size=BATCH_SIZE):
 			if grad is not None:
 				summaries.append(tf.summary.histogram(var.op.name + '/gradients', grad))
 		# Add a summary to track the learning rate.
-		summaries.append(tf.summary.scalar('learning_rate', learning_rate))
+		#summaries.append(tf.summary.scalar('learning_rate', learning_rate))
 
 	train_op = opt.apply_gradients(grads)	
 	
@@ -286,13 +354,19 @@ def train():
 	#get train_list
 	train_list = get_train_list(DATA_PATH)	
 
+	eval_list  = get_eval_list(TEST_DATA_PATH)
+
 	with tf.Graph().as_default(), tf.device('/cpu:0'):
 
 		# Create a variable to count the number of train() calls. This equals
     	# the number of batches processed * FLAGS.num_gpus.
-		global_step = tf.get_variable('global_step', [], initializer = tf.constant_initializer(0),trainable=False)
+		#global_step = tf.get_variable('global_step', [], initializer = tf.constant_initializer(0),trainable=False)
+		#lr = tf.train.exponential_decay(BASE_LR, global_step, len(train_list)//BATCH_SIZE*LR_STEP_SIZE, LR_RATE, staircase=True)
+		
+		lr = BASE_LR
+		train_input, train_gt, learning_rate, train_op, t_loss, train_output, summaries = generate_towers(train_list = train_list, lr = lr, NUM_GPU=check_available_gpus())
 
-		train_input, train_gt, learning_rate, train_op, t_loss, train_output, summaries = generate_towers(train_list = train_list, NUM_GPU=check_available_gpus())
+		eval_input, eval_gt, eval_loss_op, e_debug = eval_towers(eval_list = eval_list, NUM_GPU=check_available_gpus(), batch_size = 64)
 		
 		# Create a saver.
 		saver = tf.train.Saver(tf.global_variables(),sharded=True)
@@ -320,15 +394,22 @@ def train():
 
 		#summary_writer = tf.summary.FileWriter(CKPT_PATH, sess.graph)
 
-	try:		
+	try:	
+		log_f = open(LOG_DIR_FILE, 'w') 	
 		for epoch in xrange(0, MAX_EPOCH):
 			print('epoch start -->%4d'%(epoch+start_epoch))
 			shuffle(train_list)
 			loss_sum = 0
 			epoch_start_time = time.time()
+
+			#if epoch % 10 == 0:
+				#lr = lr * 0.1			
+
 			for step in range(len(train_list)//BATCH_SIZE):
 				offset = step*BATCH_SIZE
 				images_batch, labels_batch, _ = get_image_batch(train_list, offset, BATCH_SIZE)					
+
+
 
 				# Run one step of the model.  The return values are
 				# the activations from the `train_op` (which is
@@ -341,12 +422,13 @@ def train():
 
 				start_time = time.time()
 
-				_, loss_value ,debug= sess.run([train_op, t_loss, summaries], feed_dict=feed_dict)				
+				_, loss_value, debug = sess.run([train_op, t_loss, summaries], feed_dict=feed_dict)				
 				
-
 				duration = time.time() - start_time
-				
-				print("use time:%2.3f___step:%4d-->loss:%.4f"%(duration,step,loss_value))				
+				print("use time:%2.3f___epoch: %2d,step: %d-->loss:%.4f  lr:%.6f"%(duration, epoch, step, loss_value, lr))
+				if step % 20 == 0:
+					print >>log_f ,"use time:%2.3f___epoch: %2d,step: %d-->loss:%.4f  lr:%.6f"%(duration, epoch, step, loss_value, lr)	
+		
 				assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
 
 				loss_sum = loss_sum + loss_value
@@ -366,16 +448,29 @@ def train():
 					#summary_writer.add_summary(summary_str, step)
 				
 				# Save the model checkpoint periodically.				
-				if step % 10 == 0 or (step + 1) == MAX_EPOCH * BATCH_SIZE or (step + 1) == len(train_list)//BATCH_SIZE:
+				if step % 100 == 0 or (step + 1) == MAX_EPOCH * BATCH_SIZE or (step + 1) == len(train_list)//BATCH_SIZE:					
 					#checkpoint_path = os.path.join(CKPT_PATH,'model_%3d.ckpt'%(epoch+start_epoch))
 					checkpoint_path = os.path.join(CKPT_PATH,'model.ckpt')
 					saver.save(sess, checkpoint_path)
 					print('save model')
+
+					shuffle(eval_list)
+					eval_images_batch, eval_labels_batch, _ = get_image_batch(eval_list, 0, 1024)
+					eval_feed_dict = {eval_input:eval_images_batch, eval_gt:eval_labels_batch}
+				
+					saver.restore(sess, tf.train.latest_checkpoint(model_path))
+					eval_loss_value, e_debug1 = sess.run([eval_loss_op,e_debug], feed_dict=eval_feed_dict)				
+					print('eval: %.4f'%(eval_loss_value/4.0),e_debug1)
+					print >>log_f,'eval: %.4f'%(eval_loss_value/4.0),e_debug1
+					del eval_images_batch, eval_labels_batch
 				
 				#
 				del images_batch, labels_batch
+
 			loss_avg = loss_sum / (len(train_list)//BATCH_SIZE)
 			print('epoch %4d is over : loss_avg == %.4f --> cost time %.3f'%(epoch+start_epoch, loss_avg, time.time()-epoch_start_time))
+			print >>log_f,'epoch %4d is over : loss_avg == %.4f --> cost time %.3f'%(epoch+start_epoch, loss_avg, time.time()-epoch_start_time)
+			
 
 					
 	except tf.errors.OutOfRangeError:
@@ -387,6 +482,7 @@ def train():
 	# Wait for threads to finish.
 	coord.join(threads)
 	sess.close()
+	log_f.close()
 
 
 
