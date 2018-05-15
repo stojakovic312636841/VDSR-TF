@@ -9,7 +9,7 @@ import numpy as np
 import scipy.io
 from MODEL import model, inference
 from PSNR import psnr
-from TEST import test_VDSR
+#from TEST import test_VDSR
 from tensorflow.python.client import device_lib
 #from MODEL_FACTORIZED import model_factorized
 
@@ -20,7 +20,7 @@ CKPT_PATH = './samll_target_ckpt/'
 TOWER_NAME = 'tower'
 IMG_SIZE = (41, 41)
 BATCH_SIZE = 256
-BASE_LR = 0.000008
+BASE_LR = 0.00001
 LR_RATE = 0.1
 LR_STEP_SIZE = 5
 MAX_EPOCH = 100
@@ -28,11 +28,15 @@ MAX_EPOCH = 100
 #USE_QUEUE_LOADING = False#True
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--model_path")
-parser.add_argument("--epoch", type=int, default=0)
+parser.add_argument("--model_path", help='restore the ckpt.')
+parser.add_argument("--ckpt_path", type=str, default = '')
+parser.add_argument('--start_epochs', type=int, default=0, help='Number of epochs.')
+parser.add_argument('--debug', type=bool, default=False, help='Debug now?')
 args = parser.parse_args()
 model_path = args.model_path
-start_epoch = args.epoch
+start_epoch = args.start_epochs
+save_ckpt_path = args.ckpt_path
+debug_flag = args.debug
 
 
 def get_eval_list(data_path):
@@ -202,38 +206,6 @@ def average_gradients(tower_grads):
 	return average_grads
 
 
-'''
-def average_gradients(tower_grads): 
-     
-    print('towerGrads:')  
-    idx = 0  
-    for grads in tower_grads:  # grads 为 一个list，其中元素为 梯度-变量 组成的二元tuple  
-        print('grads---tower_%d' % idx)  
-        for g_var in grads:  
-            print(g_var)  
-            print('\t%s\n\t%s' % (g_var[0].op.name, g_var[1].op.name))  
-#             print('\t%s: %s'%(g_var[0].op.name,g_var[1].op.name))  
-        idx += 1  
-    
-    if(len(tower_grads) == 1):  
-        return tower_grads[0]  
-    avgGrad_var_s = []  
-    for grad_var_s in zip(*tower_grads):  
-        grads = []  
-        v = None  
-        for g, v_ in grad_var_s:  
-            g = tf.expand_dims(g, 0)  
-            grads.append(g)  
-            v = v_  
-        all_g = tf.concat(grads,0)  
-        avg_g = tf.reduce_mean(all_g, 0, keep_dims=False)  
-        avgGrad_var_s.append((avg_g, v));  
-    return avgGrad_var_s  
-'''
-
-
-
-
 
 def eval_towers(eval_list,NUM_GPU=2, batch_size=BATCH_SIZE):
 
@@ -353,7 +325,7 @@ def generate_towers(train_list, lr,NUM_GPU=2, batch_size=BATCH_SIZE):
 def train():
 	#get train_list
 	train_list = get_train_list(DATA_PATH)	
-
+	#get eval_list
 	eval_list  = get_eval_list(TEST_DATA_PATH)
 
 	with tf.Graph().as_default(), tf.device('/cpu:0'):
@@ -432,38 +404,31 @@ def train():
 				assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
 
 				loss_sum = loss_sum + loss_value
-
-				# Print an overview fairly often.
-				'''
-				if step % 100 == 0:
-					num_examples_per_step = FLAGS.batch_size * FLAGS.num_gpus
-					examples_per_sec = num_examples_per_step / duration
-					sec_per_batch = duration / FLAGS.num_gpus
-					format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f ''sec/batch)')
-					print(format_str % (datetime.now(), step, loss_value,examples_per_sec, sec_per_batch))
-				'''
-
-				#if step % 1 == 0:
-					#summary_str = sess.run(summary_op)
-					#summary_writer.add_summary(summary_str, step)
 				
 				# Save the model checkpoint periodically.				
-				if step % 100 == 0 or (step + 1) == MAX_EPOCH * BATCH_SIZE or (step + 1) == len(train_list)//BATCH_SIZE:					
-					#checkpoint_path = os.path.join(CKPT_PATH,'model_%3d.ckpt'%(epoch+start_epoch))
-					checkpoint_path = os.path.join(CKPT_PATH,'model.ckpt')
-					saver.save(sess, checkpoint_path)
-					print('save model')
-
+				if step % 100 == 0 or (step + 1) == MAX_EPOCH * BATCH_SIZE or (step + 1) == len(train_list)//BATCH_SIZE:	
+					if save_ckpt_path == '':
+						print('error:ckpt_path is null\r\n')	
+						os._exit(0)	
+					else:
+						#if debug, then not save model
+						if debug_flag == False:
+							#checkpoint_path = os.path.join(CKPT_PATH,'model_%3d.ckpt'%(epoch+start_epoch))
+							checkpoint_path = os.path.join(save_ckpt_path,'model.ckpt')
+							saver.save(sess, checkpoint_path)
+							print('save model')
+					
+					'''
 					shuffle(eval_list)
 					eval_images_batch, eval_labels_batch, _ = get_image_batch(eval_list, 0, 1024)
-					eval_feed_dict = {eval_input:eval_images_batch, eval_gt:eval_labels_batch}
-				
+					eval_feed_dict = {eval_input:eval_images_batch, eval_gt:eval_labels_batch}				
 					saver.restore(sess, tf.train.latest_checkpoint(model_path))
+
 					eval_loss_value, e_debug1 = sess.run([eval_loss_op,e_debug], feed_dict=eval_feed_dict)				
 					print('eval: %.4f'%(eval_loss_value/4.0),e_debug1)
 					print >>log_f,'eval: %.4f'%(eval_loss_value/4.0),e_debug1
 					del eval_images_batch, eval_labels_batch
-				
+					'''
 				#
 				del images_batch, labels_batch
 
